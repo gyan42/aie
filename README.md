@@ -1,2 +1,7 @@
-# ekalavya-
-Mt study materials references
+# ekalavya
+My study materials references
+
+## Stack
+- Apache Spark
+- Scala
+- Python 
