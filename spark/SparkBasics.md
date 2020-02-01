@@ -43,6 +43,8 @@ Spark Application ---> DataFrames / Datasets
 
 
 
+![](images/spark_execution_model.png)
+
 - Build `Stages` of `Task` objects (code + preferred location)
 - Submit them to `TaskScheduler` as ready
 - Resubmit failed `Stages` if outputs are lost The `TaskScheduler` is responsible for launching tasks at `Executors` in our cluster, re-launch failed tasks several times, return the result to `DAGScheduler`. We can now quickly summarize:
@@ -69,5 +71,9 @@ https://github.com/JerryLead/SparkInternals
 
 ## API Examples
 
-http://homepage.cs.latrobe.edu.au/zhe/ZhenHeSparkRDDAPIExamples.html
+RDD: http://homepage.cs.latrobe.edu.au/zhe/ZhenHeSparkRDDAPIExamples.html
+
+Dataset : https://databricks-prod-cloudfront.cloud.databricks.com/public/4027ec902e239c93eaaa8714f173bcfc/8963851468310921/1413687243597086/5846184720595634/latest.html
+
+
 
