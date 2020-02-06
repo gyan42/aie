@@ -18,6 +18,7 @@
 
 * **Partitions**
 
+  * Avoid spills and utilize all the cores
   * At input level
     * `spark.default.parallelism`(don't use)
     * `spark.sql.files.maxPartitionBytes`
@@ -27,18 +28,40 @@
         * Generating data
         * Source structure is not optimal
         * UDFs
-        * ![](images/parition_file_size.png)
-        * 
+      * ![](images/paritionfilesize.png)
   * At shuffle level
     * `sparl.sql.shuffle.partitions`
     * Default maximum size is **2GB**
-    * * 
 
   - At ouput level
 
     - Coalesce to shrink number of partitions
+
     - Repartition to increase the number of partitions
-    - `df.write.option("maxRecordsPerFile", N)`
+
+    - ```python
+      df.write.option("maxRecordsPerFile", n)
+      df.coalesce(n).write...
+      df.repartition(n).write...
+      df.repartition(n, [colA, ...]).write...
+      spark.sql.shuffle.partitions(n)
+      df.localCheckpoint(...).repartition(n).write...
+      df.localCheckpoint(...).coalesce(n).write...
+      ```
+
+    - ```
+      Write Data Size = 14.7GB
+      Desired File Size = 1500MB
+      Max write stage parallelism = 10
+      # Say we have 96 cores
+      96 – 10 == 86 cores idle during write
+      
+      14.7/96 cores = ~ 160 MB of parition size
+      spark.sql.files.maxPartitionBytes = 160 * 1024 * 1024
+      So now we use all 96 cores
+      ```
+
+    - ![](images/spark_partition_file_size.png)
 
   - **Never rely on default partition size of `200` at any cost**
 
@@ -55,60 +78,41 @@
 
     - ![](images/spill_corrected.png)
 
-* **Broadcast DataFrame** Join for small data files
+* **Joins**
 
-  - Default size is 10MB
+  * SortMerge Join – Both sides are lrage
 
-  - Spark SQL uses **broadcast join** (aka **broadcast hash join**) instead of hash join to optimize join queries when the size of one side data is below [spark.sql.autoBroadcastJoinThreshold](https://jaceklaskowski.gitbooks.io/mastering-spark-sql/spark-sql-properties.html#spark.sql.autoBroadcastJoinThreshold).
+  * **Broadcast DataFrame** Join when one side is small
 
-  - Broadcast allows to send a read-only variable cached on each node once, rather than sending a copy for all tasks. 
-
-  -  Requires to use Hive and its metastore for auto detection of table size
+    * Default size is 10MB
+* Spark SQL uses **broadcast join** (aka **broadcast hash join**) instead of hash join to optimize join queries when the size of one side data is below [spark.sql.autoBroadcastJoinThreshold](https://jaceklaskowski.gitbooks.io/mastering-spark-sql/spark-sql-properties.html#spark.sql.autoBroadcastJoinThreshold).
+    * Broadcast allows to send a read-only variable cached on each node once, rather than sending a copy for all tasks. 
+    * Automatic If:
+        (one side < spark.sql.autoBroadcastJoinThreshold) (default 10m)
+      * Risks
+        - Not Enough Driver Memory
+        - DF > spark.driver.maxResultSize
+        - DF > Single Executor Available Working Memory
+      * ![](images/broadcat_explained.png)
+    
+  * Requires to use Hive and its metastore for auto detection of table size
     
     ```scala
     leftDF.join(broadcast(rightDF))
     ```
-
-- **Put the Largest Dataset on the Left**
-
-  - When you’re joining together two datasets where one is smaller than the other, put the larger dataset on the “Left”:
-
+    
+  * **Put the Largest Dataset on the Left**
+  
+    * When you’re joining together two datasets where one is smaller than the other, put the larger dataset on the “Left”:
+    * When Spark shuffles data for the join, it keeps the data you specified on  the left static on the executors and transfers the data you designed on  the right between the executors. If the data that’s on the right, that’s being transferred, is larger, then the serialization and transfer of  the data will take longer.
+  
   ```
   val joinedDF = largerDF.leftJoin(smallerDF, largerDF("id") === smallerDF("some_id"))
   ```
-
-  - When Spark shuffles data for the join, it keeps the data you specified on  the left static on the executors and transfers the data you designed on  the right between the executors. If the data that’s on the right, that’s being transferred, is larger, then the serialization and transfer of  the data will take longer.
-
+    * 
 
 
-* Hive **Bucketing**
-
-  * Consider when there is a high hashable column values
-
-  * `spark.sql.sources.bucketing.enabled=True`
-
-  * Set  `hive.enforce.bucketing=false` and `hive.enforce.sorting=false`
-
-  * https://www.slideshare.net/databricks/hive-bucketing-in-apache-spark-with-tejas-patil
-
-  * ```scala
-    df.write
-      .bucketBy(numBuckets, "col1", ...)
-      .sortBy("col1", ...)
-      .saveAsTable("/path/table_name")
-    ```
-
-  * ```sql
-    create table table_name(col1 INT, ...)
-    	using parquet
-    	CLUSTERED By (col1, ...)
-    	SORTED BY(col1, ...)
-    	INTO `numBuckets` BUCKETS
-    ```
-
-  * ![](images/bucketing.png)
-
-- **Data Serialisation**
+* **Data Serialisation**
 
   - It is the process of converting the in-memory object to another format  that can be used to store in a file or send over the network.
   - Two options
@@ -116,13 +120,22 @@
     - Kryo serialization
   - Configuration : “spark.serializer” to “org.apache.spark.serializer.KyroSerializer"
 
-- Avoid User defined Function **UDFs** and User Defined Aggregate Funtions **UDAF** 
+* UDF
 
-  - Prefer in build SQL Functions where ever possible
-  - https://databricks.com/blog/2015/04/13/deep-dive-into-spark-sqls-catalyst-optimizer.html
-  - https://fr.slideshare.net/cfregly/advanced-apache-spark-meetup-project-tungsten-nov-12-2015
 
-- **Analyse Execution plan**
+  * Avoid User defined Function **UDFs** and User Defined Aggregate Funtions **UDAF** 
+  * Prefer in build SQL Functions where ever possible
+  * Traditional UDFs cannot use Tungsten
+
+    * Use `org.apache.spark.sql.functions`
+    * Use PandasUDFs
+
+      * Utilizes Apache Arrow
+    * Use SparkR UDFs
+  * https://databricks.com/blog/2015/04/13/deep-dive-into-spark-sqls-catalyst-optimizer.html
+  * https://fr.slideshare.net/cfregly/advanced-apache-spark-meetup-project-tungsten-nov-12-2015
+
+* **Analyse Execution plan**
 
   - Stages are created when there is a need for shuffle for operations like `join` or `groupBy`
 
@@ -135,13 +148,13 @@
 
     ![](images/explain.png)
 
-- **Highly imbalanced dataset**
+* **Highly imbalanced dataset**
 
   - To quickly check if everything is ok we review the execution duration of each task and look for **heterogeneous process time**. If one of the tasks is significantly slower than the others it will  extend the overall job duration and waste the resources of the fastest  executors.
 
     ![](images/stage_execution_time.png)
 
-- **Inappropriate use of caching**
+* **Inappropriate use of caching**
 
   There is no universal answer when choosing what should be cached. Caching an intermediate result can **dramatically improve performance** and it’s tempting to cache a lot of things. However, due to Spark’s  caching strategy (in-memory then swap to disk) the cache can end up in a slightly slower storage. Also, using that storage space for caching  purposes means that it’s not available for processing. In the end,  caching might cost more than simply reading the *DataFrame*.
 
@@ -149,12 +162,12 @@
 
   ![](images/cacahe.png)
 
-- Try alternatives for AWS EMR with plain EC2 
+* Try alternatives for AWS EMR with plain EC2 
 
   - https://github.com/nchammas/flintrock
   - https://heather.miller.am/blog/launching-a-spark-cluster-part-1.html
 
-- **Pitfalls with AWS S3**
+* **Pitfalls with AWS S3**
 
   - A simple renaming actually needs to copy and then delete the original file.
 
@@ -164,15 +177,7 @@
     spark.hadoop.mapreduce.fileoutputcommitter.algorithm.version 2 spark.speculation false
     ```
 
-
-
-- **Parquet**
-
-  - Columnar storage format
-  - Spark can leverage **predicate push down** (i.e. pushing down the filtering closer to the data).
-  - However, predicate pushdown should be used with extra care. Even if it appears in the execution plan, **it will not always be effective**. For example, a filter push-down does not work on String and Decimal data types (cf[ PARQUET-281](https://issues.apache.org/jira/browse/PARQUET-281)).
-
-- **Monitoring spark applications**
+* **Monitoring spark applications**
 
   - Spark includes a configurable metrics system based on the [*dropwizard.metrics*](http://metrics.dropwizard.io/) library. It is set up via the Spark configuration. As we already are heavy users of **Graphite** and **Grafana**, we use the provided [Graphite sink](https://www.hammerlab.org/2015/02/27/monitoring-spark-with-graphite-and-grafana/).
 
@@ -190,14 +195,14 @@
     - https://www.hammerlab.org/2015/02/27/monitoring-spark-with-graphite-and-grafana/
   - https://github.com/qubole/sparklens
 
-- **Java Garbage Collection**
+* **Java Garbage Collection**
 
   - Analyse the logs for the memory usage, most likely the problem would be with the data partitions.
   - https://spark.apache.org/docs/latest/tuning.html#garbage-collection-tuning
   - EMR : https://docs.aws.amazon.com/emr/latest/ManagementGuide/emr-plan-debugging.html
   - Tool to analyse the logs: https://gceasy.io/
 
-- Coalesce vs repartition
+* Coalesce vs repartition
 
   In the literature, it’s often mentioned that *coalesce* should be preferred over *repartition* to reduce the number of partitions because it avoids a shuffle step in some cases.
 
@@ -247,7 +252,45 @@ spark.sql("ANALYZE TABLE dbName.tableName COMPUTE STATISTICS FOR COLUMNS joinCol
 
 - Avoid calling **DataFrame/RDD `count` API** unless it is absolutely necessary. 
 
+- **Data Skipping**
+  
+  - **Parquet**
+    
+    - Columnar storage format
+    - Spark can leverage **predicate push down** (i.e. pushing down the filtering closer to the data).
+    - However, predicate pushdown should be used with extra care. Even if it appears in the execution plan, **it will not always be effective**. For example, a filter push-down does not work on String and Decimal data types (cf[ PARQUET-281](https://issues.apache.org/jira/browse/PARQUET-281)).
+    
+  - Hive Partitions
+  
+  - Hive **Bucketing**
+  
+    * Consider when there is a high hashable column values
+  
+    * `spark.sql.sources.bucketing.enabled=True`
+  
+    * Set  `hive.enforce.bucketing=false` and `hive.enforce.sorting=false`
+  
+    * https://www.slideshare.net/databricks/hive-bucketing-in-apache-spark-with-tejas-patil
+  
+    * ```scala
+      df.write
+        .bucketBy(numBuckets, "col1", ...)
+        .sortBy("col1", ...)
+        .saveAsTable("/path/table_name")
+      ```
+  
+    * ```sql
+      create table table_name(col1 INT, ...)
+      	using parquet
+      	CLUSTERED By (col1, ...)
+      	SORTED BY(col1, ...)
+      	INTO `numBuckets` BUCKETS
+      ```
+  
+    * ![](images/bucketing.png)
+  
 - **Data Skew**
+  
   - Common symptoms of data skew are:
     - Frozen stages and tasks.
     - Low utilization of CPU.
@@ -255,11 +298,43 @@ spark.sql("ANALYZE TABLE dbName.tableName COMPUTE STATISTICS FOR COLUMNS joinCol
   - Data broadcast during join operation can help with minimize the data skew side effects. Increase the `spark.sql.autoBroadcastJoinThreshold` for Spark to consider tables of bigger size. Make sure enough memory is available in driver and executors
   - Salting
     - In a SQL join operation, the join key is changed to redistribute data in an even manner so that processing for a partition does not take more  time. This technique is called salting.
-    - Can we add something to the so that our dataset will be more evenly  distributed? Most of users with skew problems use the salting technique. Salting is a technique where we will add random values to the join key  of one of the tables. In the other table, we need to replicate the rows  to match the random keys. The idea is if the join condition is satisfied by key1 == key1, it should also get satisfied by key1_<salt> =  key1_<salt>. The value of salt will help the dataset to be more  evenly distributed.
+    
+    -  Add Column to each side with random int between 0 and `spark.sql.shuffle.partitions` – 1 to both sides
+    
+    - Add join clause to include join on generated column above
+    
+    - Drop temp columns from result
+    
+    - ```scala
+      df.groupBy(“city”, “state”).agg(<f(x)>).orderBy(col.desc)
+      val saltVal = random(0, spark.conf.get(org...shuffle.partitions) - 1)
+      df.withColumn(“salt”, lit(saltVal))
+      .groupBy(“city”, “state”, “salt”)
+      .agg(<f(x)>)
+      .drop(“salt”)
+      .orderBy(col.desc)
+      
+      ```
 
-
+- **Omit Expensive Ops**
+  - Repartition
+    - Use Coalesce or Shuffle Partition Count
+  - Count – Do you really need it?
+  - DistinctCount
+    - use approxCountDistinct()
+  - If distincts are required, put them in the right place
+    - Use dropDuplicates
+    - dropDuplicates BEFORE the join
+    - dropDuplicates BEFORE the groupBy
+- **Advanced Parallelism**
+  - Spark’s Three Levels of Parallelism
+    - Driver Parallelism
+      - ![](images/driver_tasks.png)
+    - Horizontal Parallelism
+    - Executor Parallelism
 
 ## Good reads
 
 - https://medium.com/teads-engineering/lessons-learned-while-optimizing-spark-aggregation-jobs-f93107f7867f
 - https://www.slideshare.net/databricks/apache-spark-coredeep-diveproper-optimization
+- https://michalsenkyr.github.io/2018/01/spark-performance
