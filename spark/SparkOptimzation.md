@@ -109,7 +109,48 @@
   ```
   val joinedDF = largerDF.leftJoin(smallerDF, largerDF("id") === smallerDF("some_id"))
   ```
-    * 
+    * Be aware of `null` values 
+  
+        * Consider sample query where we are joining on highly null columns
+  
+        * ![](images/null_counts.png)
+  
+          ```sql
+          select * from  order_tbl orders left join customer_tbl  customer
+                on orders.customer_id = customer.customer_id
+                left join delivery_tbl delivery
+                on  orders.delivery_id = delivery.delivery_id
+          ```
+  
+        * In above query, 199/200 tasks would complete quite fast and then probably gets stuck on the last task. 
+  
+        * ***Reason for the above behavior:\*** Let’s say that we have asked Spark to join two DataFrames — TABLE1 and  TABLE2. When Spark executes this code, internally it performs the  default Shuffle Hash Join (Exchange hashpartitioning).
+  
+          ```
+          +- Exchange hashpartitioning(delivery_id#22L, 400)
+                         +- *(6) Project [delivery_id#22L]
+          ```
+  
+          In this process, Spark hashes the join column and sorts it. And then it  tries to keep the records with same hashes in both partitions on the  same executor hence all the null values of the table will go to one  executor and spark gets into a continuous loop of shuffling and garbage  collection with no success.
+  
+      * Solution is split the tables into two parts, one with null values(i.e all the values) and without null values. 
+  
+      * Use table without null values for join and then union them with full data
+  
+      * This way null values won't participate in the join
+  
+      * ```sql
+        CREATE TABLE order_tbl_customer_id_not_null as select * from order_tbl where customer_id is not null;
+        
+        CREATE TABLE order_tbl_customer_id_null as select * from order_tbl where customer_id is null;
+        
+        --Rewrite query
+        select orders.customer_id
+        from  order_tbl_customer_id_not_null orders left join customer_tbl  customer 
+                 on orders.customer_id = customer.customer_id
+        union all
+        select ord.customer_id from order_tbl_customer_id_null ord;
+        ```
 
 
 * **Data Serialisation**
@@ -293,6 +334,7 @@ spark.sql("ANALYZE TABLE dbName.tableName COMPUTE STATISTICS FOR COLUMNS joinCol
   
   - Common symptoms of data skew are:
     - Frozen stages and tasks.
+      - Especially with the last couple of tasks in a stage
     - Low utilization of CPU.
     - Out of memory errors.
   - Data broadcast during join operation can help with minimize the data skew side effects. Increase the `spark.sql.autoBroadcastJoinThreshold` for Spark to consider tables of bigger size. Make sure enough memory is available in driver and executors
