@@ -1,0 +1,12 @@
+#Scentific Libs
+scipy==1.4.1
+#ML
+scikit-learn==0.22.1
+#NLP
+spacy==2.2.3
+nltk==3.4.5
+#Misc
+jupyterlab==1.2.6
+#Visulization
+seaborn==0.10.0
+wordcloud==1.6.0
