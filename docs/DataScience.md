@@ -15,3 +15,7 @@
   - If the loss function is using `log` and the lables are in negative region
   - When using cross enropy as loss function and the predictions are having same probability distribution
   - When `Nan` is in the input data. Avoid it by assserting `assert not np.any(np.isnan(x))`
+
+### Reference Links
+- http://neuralnetworksanddeeplearning.com/
+
