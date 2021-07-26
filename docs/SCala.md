@@ -1,0 +1,1 @@
+https://www.lihaoyi.com/post/TheDeathofHypeWhatsNextforScala.html

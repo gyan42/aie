@@ -1,0 +1,1 @@
+- https://www.learnpyqt.com/blog/pyqt5-vs-pyside2/
