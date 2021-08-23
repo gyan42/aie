@@ -7,7 +7,7 @@ scikit-learn==0.22.1
 spacy==2.2.3
 nltk==3.4.5
 #Misc
-jupyterlab==1.2.6
+jupyterlab==1.2.21
 psycopg2==2.8.2
 #Visulization
 seaborn==0.10.0
